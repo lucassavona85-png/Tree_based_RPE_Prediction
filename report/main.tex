@@ -1,0 +1,736 @@
+\documentclass[10pt, twocolumn]{article}
+
+\usepackage[margin=1.8cm]{geometry}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage[numbers]{natbib}
+\usepackage{microtype}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{placeins}
+\usepackage{lmodern}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{balance}
+
+\captionsetup{font=small, labelfont=bf}
+\hypersetup{colorlinks=true, linkcolor=blue, citecolor=blue, urlcolor=blue}
+
+% -----------------------------------------------------------------------
+\title{Predicting the Rating of Perceived Exertion in Competitive
+       Runners Using Tree-Based Machine Learning Models}
+
+\author{Lucas Savona\\
+        \small Master IEAP DigiMove\\
+        \small Universit\'{e} de Montpellier\\\\
+        \small \url{https://github.com/lucassavona85-png/Tree_based_RPE_Prediction}}
+
+\date{April 2026}
+% -----------------------------------------------------------------------
+
+\begin{document}
+
+\maketitle
+
+% -----------------------------------------------------------------------
+\begin{abstract}
+Accurately predicting an athlete's subjective training load the day after
+a session can inform training management and reduce injury risk. This study
+investigates whether the Rating of Perceived Exertion (RPE) can be predicted
+from the preceding six days of training history using tree-based machine
+learning models. Three models, a Decision Tree, a Random Forest, and
+XGBoost, are trained and evaluated on a longitudinal dataset of 74
+competitive runners \citep{lovdal2021}. Two validation strategies are
+compared: a single chronological 80/20 split and a five-fold walk-forward
+cross-validation scheme. XGBoost achieves the best performance under both
+schemes (RMSE\,=\,0.239, MAE\,=\,0.189, $R^2$\,=\,0.239 on the held-out
+test set), with past training success emerging as the most informative
+predictor. Results confirm the viability of tree-based approaches for
+personalised training load monitoring.
+\end{abstract}
+
+% -----------------------------------------------------------------------
+\section{Introduction}
+\label{sec:intro}
+
+The goal of this study is to predict the Rating of Perceived
+Exertion (RPE) of a competitive runner's training session from their
+recent training history covering the preceding six days. RPE is a
+subjective measure of exercise intensity that integrates physiological
+and psychological load into a single scalar value \citep{borg1982, foster2001}.
+Reliable RPE forecasts could allow practitioners to anticipate excessive
+training stress and intervene before fatigue accumulates into injury.
+
+Predicting RPE from training data has been explored in team sports
+contexts. L{\"o}vdal et al.~\cite{lovdal2021} demonstrated that XGBoost models trained
+on GPS and subjective load data from competitive runners could predict
+injury risk with an AUC of 0.724. Related work in football has shown
+that external load variables measured over rolling windows can predict
+session RPE with moderate accuracy, though results depend heavily on
+the athlete population and the prediction horizon \citep{vallance2023}.
+To our knowledge, no study has framed RPE prediction as a pure
+time-series regression task on this dataset, using only the preceding
+six days of history as input while explicitly excluding same-session
+features to avoid data leakage.
+
+Machine learning offers a principled framework for this prediction task.
+Tree-based models are particularly well suited because they (i)~handle
+multivariate, heterogeneous feature sets without preprocessing, (ii)~are
+inherently interpretable through variable importance measures, and (iii)~have
+demonstrated competitive performance in sports science applications
+\citep{lovdal2021}. We evaluate three such models of increasing complexity:
+a single Decision Tree (CART), a Random Forest ensemble, and a gradient
+boosting model (XGBoost).
+
+Each model is selected to represent a distinct point on the
+interpretability-performance spectrum. The Decision Tree offers full
+transparency: its structure can be visualised as a single diagram
+(Figure~\ref{fig:tree}) and every prediction traced to a root-to-leaf
+path. The Random Forest sacrifices individual tree transparency for
+lower variance through bagging. XGBoost further reduces bias through
+sequential boosting at the cost of additional complexity. This
+progression allows us to empirically quantify the accuracy gain
+achieved at each step of the ensemble hierarchy.
+
+A critical methodological challenge in athlete monitoring is temporal
+dependency: training load and recovery follow temporal patterns, so a naive
+cross-validation that shuffles observations would introduce data leakage
+across time. We address this by using chronological validation throughout
+and compare two schemes, a single temporal split and a walk-forward
+cross-validation, to assess their consistency.
+
+% -----------------------------------------------------------------------
+\section{Tree-Based Models}
+\label{sec:models}
+
+\subsection{Decision Trees (CART)}
+\label{subsec:dt}
+
+A Classification and Regression Tree (CART) \citep{breiman1984} partitions
+the feature space by recursively selecting the split variable and threshold
+that maximally reduce the mean squared error (MSE) of the response within
+each resulting region. Formally, at node~$t$ the algorithm selects the
+split that maximises the impurity decrease:
+
+\begin{equation}
+  \Delta_{\text{MSE}}(t) = \text{MSE}(t)
+    - \frac{|t_L|}{|t|}\,\text{MSE}(t_L)
+    - \frac{|t_R|}{|t|}\,\text{MSE}(t_R),
+  \label{eq:mse_split}
+\end{equation}
+
+where $t_L$ and $t_R$ denote the left and right child nodes and
+$|\cdot|$ their cardinality. The tree grows until a stopping criterion
+is met, controlled by the complexity parameter $cp$ (minimum impurity
+decrease required for any split). In this study, $cp$ is treated as
+the primary hyperparameter and selected by chronological cross-validation.
+
+Unlike linear models, decision trees require neither feature normalisation
+nor dimensionality reduction, as the splitting criterion implicitly selects
+the most informative variables at each node. The final tree is visualised
+using a recursive node diagram (Figure~\ref{fig:tree}), providing a fully
+transparent decision path from raw features to the predicted RPE value.
+
+A known limitation is that predictions in leaves populated by few training
+examples carry higher uncertainty, as the leaf mean is estimated from a
+small sample \citep{breiman1984}. This motivates the ensemble methods
+described below. In a related line of research, Sutton-Charani~\citep{suttoncharani2014}
+extended CART to uncertain training data by modelling imprecise attributes
+and labels with belief functions and estimating tree parameters via the
+credibilistic E$^2$M algorithm.
+
+\subsection{Random Forests}
+\label{subsec:rf}
+
+A Random Forest \citep{breiman2001} mitigates the high variance of individual
+trees by averaging the predictions of $B$ independently trained trees:
+
+\begin{equation}
+  \hat{y} = \frac{1}{B} \sum_{b=1}^{B} T_b(\mathbf{x}),
+  \label{eq:rf_avg}
+\end{equation}
+
+where each tree $T_b$ is trained on a bootstrap sample of the training data
+and, at each split, considers only a random subset of $m$ features
+(we use $m = \lfloor p/3 \rfloor$ for regression, following the standard
+default \citep{hastie2009}). This \emph{decorrelation} between trees reduces
+variance without substantially increasing bias, yielding lower generalisation
+error than a single tree.
+
+Variable importance is estimated via permutation: for each feature, the
+increase in out-of-bag prediction error when its values are randomly
+shuffled is recorded (\%IncMSE). This permutation-based measure is
+preferred over the mean decrease in node impurity, which is biased towards
+high-cardinality features \citep{breiman2001}.
+
+The bias-variance decomposition underpins the expected performance
+progression: a single deep tree has low bias but high variance;
+Random Forest reduces variance through bagging; gradient boosting
+reduces bias through sequential residual fitting while controlling
+variance via shrinkage ($\eta$) and sub-sampling.
+
+\subsection{Gradient Boosting (XGBoost)}
+\label{subsec:xgb}
+
+Gradient boosting \citep{friedman2001} builds an additive ensemble by
+sequentially fitting shallow trees to the negative gradient of the loss
+function:
+
+\begin{equation}
+  F_m(\mathbf{x}) = F_{m-1}(\mathbf{x}) + \eta \cdot h_m(\mathbf{x}),
+  \label{eq:gb_update}
+\end{equation}
+
+where $h_m$ is a regression tree fitted to the residuals of $F_{m-1}$
+and $\eta \in (0,1]$ is the learning rate (also called \emph{shrinkage}).
+The learning rate is the most critical hyperparameter: a smaller $\eta$
+requires more boosting rounds but typically achieves better generalisation.
+XGBoost \citep{chen2016} extends this framework with second-order gradient
+approximations, column sub-sampling, and $\ell_1$/$\ell_2$ regularisation,
+making it both faster and more robust than vanilla gradient boosting.
+Feature importance is measured by the \emph{Gain} criterion: the average
+reduction in training loss attributable to each feature across all splits
+where it appears.
+
+% -----------------------------------------------------------------------
+\section{Data and Methods}
+\label{sec:methods}
+
+\subsection{Dataset}
+\label{subsec:data}
+
+We use the \emph{Injury Prediction for Competitive Runners} dataset
+collected by L{\"o}vdal et al.~\cite{lovdal2021}, publicly available on
+Kaggle\footnote{\url{https://www.kaggle.com/code/mohamedbakrey/anticipate-injured-numbers-in-competitive-runners}}.
+It comprises seven years of daily training logs from 74 high-level middle- and
+long-distance runners. For each athlete and day, ten variables are recorded:
+total kilometres run, kilometres in heart-rate zones 3--4 and 5/T1/T2,
+sprint kilometres, number of sessions, number of strength sessions, RPE,
+perceived recovery, and a binary injury indicator.
+
+Our target variable is RPE, normalised to the interval $[0, 1]$. Following
+L{\"o}vdal et al.~\cite{lovdal2021}, rows where RPE is missing are removed; the target is
+never imputed. The original binary injury label is not used. After filtering,
+the modelling dataset contains 42\,766 observations.
+
+Table~\ref{tab:features} summarises the ten raw features recorded
+daily for each athlete. The target variable (RPE, no suffix) exhibits
+a right-skewed distribution with mean 0.22 and standard deviation 0.14
+on the training set, reflecting the predominance of low-intensity
+sessions in competitive runners' training programmes.
+
+\begin{table}[!htb]
+  \centering
+  \small
+  \caption{Raw daily features in the dataset. Each feature is
+           replicated six times (suffixes .1--.6) to form the
+           60-column feature matrix used for modelling.}
+  \label{tab:features}
+  \begin{tabular}{@{}llp{3.8cm}@{}}
+    \toprule
+    Feature & Type & Description \\
+    \midrule
+    Total km           & Obj. & Total distance run \\
+    km Z3-4            & Obj. & Distance in HR zones 3--4 \\
+    km Z5-T1-T2        & Obj. & Distance in HR zones 5/T1/T2 \\
+    km sprinting       & Obj. & Sprint distance \\
+    Nr.\ sessions      & Obj. & Sessions per day \\
+    Strength training  & Obj. & Strength sessions \\
+    Hours alternative  & Obj. & Cross-training hours \\
+    Perceived exertion & Subj. & RPE (target at day $t$) \\
+    Training success   & Subj. & Self-rated session quality \\
+    Perceived recovery & Subj. & Self-rated recovery \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Feature Engineering}
+\label{subsec:features}
+
+The dataset is provided as a pre-built sliding window: each row already
+contains the current day's variables (suffix-free, day~$t$) alongside the
+values of all ten variables for the six preceding days (suffixes \texttt{.1}
+through \texttt{.6}, corresponding to days $t-1$ through $t-6$). An
+empirical shift test confirmed that the no-suffix RPE column corresponds
+to the current day and must serve as the target, never as a feature.
+
+The 60 feature columns (10 variables $\times$ 6 lag days) are used directly
+as model inputs. No normalisation or dimensionality reduction is applied;
+as noted in Section~\ref{sec:models}, tree-based models are invariant to
+monotone transformations of features.
+
+\subsection{Experimental Protocol}
+\label{subsec:protocol}
+
+Train/test split.
+A chronological split is used: observations with a global date index at or
+below the 80th percentile (Date~$\leq 2057$) constitute the training set
+(34\,226 observations) and the remaining 20\% form the held-out test set
+(8\,540 observations). To preserve the temporal integrity of the data,
+no shuffling is applied, as randomised cross-validation would introduce
+data leakage across athletes over time.
+
+Validation schemes.
+Two schemes are compared, applied to the training set only; the held-out
+test set is never seen during training or hyperparameter selection.
+
+\begin{itemize}
+  \item Temporal Split (TS): Models are fitted once on the full
+    training set after an internal time-slice cross-validation selects the
+    optimal hyperparameters. Performance is reported once on the test set.
+  \item Walk-Forward CV (FW): The training set is divided into five
+    non-overlapping folds using an expanding-window strategy
+    (initialWindow\,=\,70\%, horizon\,=\,6\% of training rows,
+    fixedWindow\,=\,FALSE). Each fold evaluates predictions on a block of
+    future observations not seen during training. The mean $\pm$ standard
+    deviation of the fold-level RMSE is reported for model selection.
+    The winning model is then re-fitted on the full training set and
+    evaluated on the shared test set.
+\end{itemize}
+
+Hyperparameters.
+For the Decision Tree, the complexity parameter $cp \in [0.0001, 0.05]$
+is selected by minimising RMSE over the walk-forward folds (or the
+internal time-slice CV for the TS scheme); the optimal value is
+$cp = 0.001821$, yielding a tree with 17 leaves. For the Random Forest,
+500 trees are grown with $m = 20$ candidates per split. For XGBoost,
+$\eta = 0.05$, max depth~=~4, column sub-sampling~=~0.8, and the number
+of boosting rounds (527) is determined by five-fold early stopping
+(50 rounds patience).
+
+Baseline.
+A dummy predictor that constantly outputs the training-set mean RPE (0.223)
+is included as a performance floor. Any model with $R^2 \leq 0$ fails to
+outperform this trivial baseline.
+
+Evaluation metrics.
+Three complementary metrics are reported on the held-out test set:
+Root Mean Squared Error (RMSE, penalises large errors), Mean Absolute Error
+(MAE, robust to outliers), and the coefficient of determination $R^2$
+(proportion of variance explained, model-agnostic).
+
+\subsection{Descriptive Analysis of the Target Variable}
+\label{subsec:eda}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.95\columnwidth]{../figures/fig_rpe_histogram.pdf}
+  \caption{Distribution of RPE on the training set ($n = 34\,226$).
+           Dashed red: mean; dotted blue: median. The distribution
+           is right-skewed with mass between 0.1 and 0.3.}
+  \label{fig:rpe_hist}
+\end{figure}
+
+Figure~\ref{fig:rpe_hist} shows that RPE is right-skewed, with mass
+concentrated between 0.1 and 0.3, reflecting the predominance of
+low-intensity sessions; high-intensity sessions (RPE $> 0.5$) are
+rare. The dummy baseline consequently over-predicts low-intensity
+sessions and under-predicts high-intensity ones ($R^2 = -0.206$).
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.95\columnwidth]{../figures/fig_correlation_heatmap.pdf}
+  \caption{Pairwise Pearson correlation at lag $t-1$.
+           Subjective variables cluster together; objective and
+           subjective features form distinct correlation blocks.}
+  \label{fig:corr_heatmap}
+\end{figure}
+
+Figure~\ref{fig:corr_heatmap} reveals that subjective variables
+(exertion, training success, recovery) are moderately inter-correlated
+but weakly correlated with objective load metrics, suggesting
+complementary dimensions of the training response. Because athletes
+vary in absolute volumes, these implicitly self-normalised subjective
+indicators may reduce inter-individual variability, a hypothesis
+supported by the feature importance rankings
+(Section~\ref{sec:results}).
+
+\FloatBarrier
+% -----------------------------------------------------------------------
+\section{Results}
+\label{sec:results}
+
+\subsection{Walk-Forward Cross-Validation}
+
+Table~\ref{tab:cv} reports the fold-level RMSE for the five walk-forward
+folds under the FW scheme. XGBoost achieves the lowest mean CV RMSE, with
+small standard deviation, indicating stable performance across time windows.
+The CV ranking (DT $>$ RF $>$ XGBoost) is consistent across all five folds
+(Figure~\ref{fig:cv_folds}, Appendix).
+
+\begin{table}[htbp]
+  \centering
+  \small
+  \caption{Walk-forward cross-validation RMSE (mean\,$\pm$\,sd, 5 folds).}
+  \label{tab:cv}
+  \begin{tabular}{lc}
+    \toprule
+    Model & CV RMSE \\
+    \midrule
+    Decision Tree & $0.2534 \pm 0.0105$ \\
+    Random Forest & $0.2444 \pm 0.0084$ \\
+    XGBoost       & $\mathbf{0.2416 \pm 0.0080}$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Test Set Performance}
+
+Table~\ref{tab:results} presents the final performance metrics on the
+held-out test set, identical for both validation schemes (same training
+data and hyperparameters). All three learned models substantially outperform
+the dummy baseline ($R^2 = -0.206$). XGBoost achieves the best result on all
+three metrics, with Random Forest a close second. The consistency between
+walk-forward CV RMSE and test RMSE confirms that the FW scheme provides a
+reliable estimate of generalisation performance. Figure~\ref{fig:comparison}
+(Appendix) shows side-by-side RMSE bars for both schemes and all models.
+Notably, the two schemes produce identical test RMSE values for all
+three models (to three decimal places), confirming that the choice
+of validation strategy does not affect final model performance when
+the test set is held fixed. Because the two schemes yield identical
+test-set metrics, all subsequent analyses (feature importance,
+predicted vs.\ actual plots) are reported under the TS scheme only;
+FW-specific diagnostics are provided in the Appendix.
+
+\begin{table}[htbp]
+  \centering
+  \small
+  \caption{Model performance on the held-out test set (last 20\% by date).
+           RPE is on a normalised $[0,1]$ scale. Best value per column
+           in bold.}
+  \label{tab:results}
+  \begin{tabular}{lccc}
+    \toprule
+    Model & RMSE & MAE & $R^2$ \\
+    \midrule
+    Dummy baseline & 0.301 & 0.252 & $-$0.206 \\
+    Decision Tree  & 0.254 & 0.205 & 0.142 \\
+    Random Forest  & 0.242 & 0.193 & 0.217 \\
+    XGBoost        & \textbf{0.239} & \textbf{0.189} & \textbf{0.239} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Feature Importance}
+\label{subsec:importance}
+
+Figures~\ref{fig:xgb_importance} and~\ref{fig:rf_importance}
+display the top-15 features under each importance criterion.
+The two models agree on the most informative predictors but diverge
+in their ranking of objective load features.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.95\columnwidth]{../figures/fig_xgb_importance_TS.pdf}
+  \caption{XGBoost Gain importance (top 15). \emph{Training success
+           at $t-2$} dominates by a large margin.}
+  \label{fig:xgb_importance}
+\end{figure}
+
+Under XGBoost Gain, \emph{perceived training success at $t-2$} (0.195)
+and \emph{perceived exertion at $t-2$} (0.173) dominate by a large
+margin, with all other features below 0.08. This concentration suggests
+that XGBoost's splitting strategy captures most of the predictable
+signal through a small number of high-gain splits on subjective
+variables. Objective load metrics (total km, km Z5-T1-T2) appear only
+below rank 12, with Gain values near 0.01.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.95\columnwidth]{../figures/fig_rf_importance_TS.pdf}
+  \caption{Random Forest permutation importance (\%IncMSE, top 15).
+           Ranking is more evenly distributed than XGBoost Gain.}
+  \label{fig:rf_importance}
+\end{figure}
+
+The Random Forest permutation ranking is more distributed:
+\emph{total km at $t-1$} (36.9\%) ranks first, followed by
+\emph{strength training at $t-1$} (33\%) and
+\emph{perceived training success at $t-2$} (28.3\%).
+This discrepancy between the two importance measures is expected:
+Gain is computed on training splits and can be dominated by a few
+high-purity nodes, while permutation importance (\%IncMSE) measures
+the effect of each feature on held-out OOB predictions and is
+therefore more robust to overfitting artefacts. Both measures agree
+that the most recent days ($t-1$, $t-2$) are more informative than
+older lags ($t-5$, $t-6$), consistent with the physiological
+rationale that acute fatigue decays over two to three days.
+
+The decision tree (Figure~\ref{fig:tree}, Appendix) confirms this:
+the root split is on \emph{training success at $t-2$}, and the tree
+is shallow (17~leaves), indicating that a small number of conditional
+rules on subjective variables capture the main RPE structure.
+
+\subsection{Predicted vs.\ Actual Analysis}
+\label{subsec:pred_actual}
+
+Figure~\ref{fig:pred_actual} shows predicted versus actual RPE for
+XGBoost on the test set. The cloud aligns broadly with the identity
+line, confirming predictive signal. Three patterns emerge:
+(i)~under-prediction at high RPE ($> 0.6$), consistent with the
+rarity of intense sessions in training data; (ii)~correct
+identification of rest days (near-zero load); (iii)~substantial
+spread around the diagonal, reflecting irreducible variability in
+subjective perception that caps the achievable $R^2$.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.85\columnwidth]{../figures/fig_pred_actual_xgb_TS.pdf}
+  \caption{Predicted vs.\ actual RPE for XGBoost on the held-out
+           test set. Dashed line: perfect prediction. The spread
+           reflects irreducible variability in subjective effort
+           perception.}
+  \label{fig:pred_actual}
+\end{figure}
+
+% -----------------------------------------------------------------------
+\section{Discussion}
+\label{sec:discussion}
+
+The results demonstrate that tree-based models can predict RPE from recent
+training history with moderate accuracy ($R^2 \approx 0.24$ for XGBoost).
+The gap between the dummy baseline ($R^2 = -0.206$) and the best model
+($R^2 = 0.239$) indicates that the feature set carries genuine predictive
+signal, even though a substantial portion of RPE variance remains
+unexplained.
+This level of accuracy is modest but not unusual: Vallance
+et al.~\citep{vallance2023} achieved a 60\% RMSE reduction over a
+dummy baseline when predicting RPE in professional soccer players,
+though their models included same-session GPS features that are
+unavailable in our prediction-ahead setting.
+
+A frank assessment of the $R^2 = 0.239$ achieved by XGBoost is warranted.
+The model explains roughly 24\% of RPE variance; over three quarters
+remains attributable to factors absent from the dataset, sleep quality,
+psychological stress, nutrition, and competitive context. A practitioner
+would not modify a training plan on the basis of this model alone.
+However, Vallance et al.~\citep{vallance2023} showed that tree-based
+models can reduce RPE prediction RMSE by 60\% over a dummy baseline
+in professional soccer when same-session GPS data and four weeks of
+history are available. Our lower accuracy is expected, since we
+deliberately exclude same-session features to enable genuine
+one-day-ahead forecasting. The model is therefore better
+understood as a complementary screening tool, capable of flagging athletes
+at elevated risk of excessive load within a broader multi-dimensional
+monitoring system, rather than as a standalone session-level predictor.
+
+The dominance of subjective indicators (perceived training success,
+perceived recovery) over objective load metrics in both importance rankings
+is consistent with the psychophysiological literature: RPE integrates not
+only physiological stress but also motivational and contextual factors that
+are partly captured by subjective self-report variables from preceding days
+\citep{foster2001}.
+
+Both validation schemes yield the same ranking and near-identical test
+metrics, which validates the walk-forward CV as a reliable model-selection
+criterion in this temporal setting. The small standard deviation of fold-level
+RMSE ($\leq 0.011$) suggests that model performance is stable across
+different training windows, i.e., the models do not overfit to any
+particular temporal period.
+
+The two-day lag of the strongest predictor (\emph{training success at
+$t-2$}) suggests that the psychophysiological response to a suboptimal
+session needs more than 24\,h to manifest as elevated perceived
+exertion. The weak ranking of objective load metrics reinforces the
+case for multi-dimensional monitoring that includes subjective wellness
+data alongside GPS-derived external load \citep{foster2001}.
+
+A limitation inherent to decision trees is that predictions in leaves
+populated by few training examples carry higher uncertainty, a challenge
+addressed by ensemble methods here through bagging (RF) and boosting
+(XGBoost) \citep{breiman2001, friedman2001}.
+
+% -----------------------------------------------------------------------
+\section{Conclusion}
+\label{sec:conclusion}
+
+This study investigated whether the RPE of a competitive runner's
+training session can be predicted from six days of training
+history using tree-based models. XGBoost achieved the best
+performance ($R^2 = 0.239$), followed by Random Forest and
+Decision Tree, confirming the expected bias-variance progression
+from single tree to bagged and boosted ensembles. Both validation
+schemes produced identical rankings, validating walk-forward CV
+as a reliable strategy for temporally structured data.
+
+Subjective variables, in particular perceived training success at
+$t-2$, consistently outranked objective load metrics, suggesting
+that monitoring programmes should prioritise collecting subjective
+wellness data alongside GPS-derived metrics.
+
+Several limitations warrant acknowledgement. First, the $R^2$ of
+0.239 indicates that a substantial portion of RPE variance remains
+unexplained, likely due to factors not captured in the dataset
+(sleep quality, stress, nutrition, competitive context). Second,
+the prediction horizon is limited to one day ahead; extending to
+longer horizons would be of practical interest for weekly training
+planning. Third, the model is trained and evaluated on a single
+cohort of Dutch competitive runners; generalisation to other
+populations (recreational runners, team sport athletes) has not
+been tested.
+
+Future work could explore a multi-label formulation that jointly
+predicts RPE, perceived recovery, and injury risk, exploiting the
+correlations among these outcomes.
+Moreover, the subjective variables in the dataset (RPE, training
+success, perceived recovery) are inherently imprecise and could be
+modelled as uncertain data in the credibilistic sense. The E$^2$M
+decision trees proposed by Sutton-Charani~\citep{suttoncharani2014}
+would provide a formal framework for integrating this input uncertainty
+directly into tree construction, rather than treating it as noise.
+
+% -----------------------------------------------------------------------
+% -----------------------------------------------------------------------
+\begin{thebibliography}{10}
+\small
+
+\bibitem{lovdal2021}
+L{\"o}vdal, S., Den Hartigh, R., \& Azzopardi, G. (2021).
+Injury prediction in competitive runners with machine learning.
+\textit{International Journal of Sports Physiology and Performance},
+16(10), 1507--1514.
+
+\bibitem{borg1982}
+Borg, G. (1982).
+Psychophysical bases of perceived exertion.
+\textit{Medicine \& Science in Sports \& Exercise}, 14(5), 377--381.
+
+\bibitem{foster2001}
+Foster, C., et al. (2001).
+A new approach to monitoring exercise training.
+\textit{Journal of Strength and Conditioning Research}, 15(1), 109--115.
+
+\bibitem{vallance2023}
+Vallance, E., Sutton-Charani, N., Guyot, P., \& Perrey, S. (2023).
+Predictive modeling of the ratings of perceived exertion during training
+and competition in professional soccer players.
+\textit{Journal of Science and Medicine in Sport}, 26(6), 322--327.
+
+\bibitem{breiman1984}
+Breiman, L., Friedman, J., Olshen, R., \& Stone, C. (1984).
+\textit{Classification and Regression Trees}. Wadsworth.
+
+\bibitem{suttoncharani2014}
+Sutton-Charani, N. (2014).
+\textit{Apprentissage \`a partir de donn\'ees et de connaissances
+incertaines\,: application \`a la pr\'ediction de la qualit\'e du
+caoutchouc} (Doctoral dissertation). Universit\'e de Technologie de
+Compi\`egne.
+
+\bibitem{breiman2001}
+Breiman, L. (2001).
+Random forests.
+\textit{Machine Learning}, 45, 5--32.
+
+\bibitem{hastie2009}
+Hastie, T., Tibshirani, R., \& Friedman, J. (2009).
+\textit{The Elements of Statistical Learning} (2nd ed.). Springer.
+
+\bibitem{friedman2001}
+Friedman, J. H. (2001).
+Greedy function approximation: a gradient boosting machine.
+\textit{Annals of Statistics}, 29(5), 1189--1232.
+
+\bibitem{chen2016}
+Chen, T., \& Guestrin, C. (2016).
+XGBoost: A scalable tree boosting system.
+\textit{Proceedings of KDD 2016}, 785--794.
+
+\end{thebibliography}
+
+\appendix
+\onecolumn
+\section{Supplementary Figures}
+\vspace{-0.3cm}
+
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{../figures/fig_tree_TS.pdf}
+    \caption{TS scheme (17 leaves).}
+    \label{fig:tree}
+  \end{subfigure}\hfill
+  \begin{subfigure}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{../figures/fig_tree_FW.pdf}
+    \caption{FW scheme.}
+    \label{fig:tree_fw}
+  \end{subfigure}
+  \caption{Decision Trees. Root split on \emph{perceived training
+           success at $t-2$} in both schemes.}
+  \label{fig:trees}
+\end{figure}
+\vspace{-0.4cm}
+
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{../figures/fig_xgb_importance_FW.pdf}
+    \caption{XGBoost Gain (FW).}
+    \label{fig:xgb_importance_fw}
+  \end{subfigure}\hfill
+  \begin{subfigure}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{../figures/fig_rf_importance_FW.pdf}
+    \caption{RF permutation importance (FW).}
+    \label{fig:rf_importance_fw}
+  \end{subfigure}
+  \caption{Variable importance (top 15) under the FW scheme.
+           Rankings mirror the TS results
+           (Figures~\ref{fig:xgb_importance}--\ref{fig:rf_importance}).}
+  \label{fig:importance_fw}
+\end{figure}
+\vspace{-0.4cm}
+
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{../figures/fig_cv_folds_FW.pdf}
+    \caption{Walk-forward CV RMSE per fold.}
+    \label{fig:cv_folds}
+  \end{subfigure}\hfill
+  \begin{subfigure}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{../figures/fig_comparison_TS_vs_FW.pdf}
+    \caption{TS vs.\ FW test RMSE comparison.}
+    \label{fig:comparison}
+  \end{subfigure}
+  \caption{Validation scheme analysis.}
+  \label{fig:validation}
+\end{figure}
+
+\newpage
+
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{../figures/fig_model_comparison_TS.pdf}
+    \caption{TS scheme.}
+    \label{fig:model_comparison_ts}
+  \end{subfigure}\hfill
+  \begin{subfigure}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{../figures/fig_model_comparison_FW.pdf}
+    \caption{FW scheme.}
+    \label{fig:model_comparison_fw}
+  \end{subfigure}
+  \caption{Model comparison (RMSE, MAE, $R^2$) under both validation schemes.}
+  \label{fig:model_comparison_appendix}
+\end{figure}
+\vspace{-0.4cm}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.48\textwidth]{../figures/fig_pred_actual_xgb_FW.pdf}
+  \caption{XGBoost predicted vs.\ actual RPE under the FW scheme.}
+  \label{fig:pred_actual_fw}
+\end{figure}
+
+\end{document}
